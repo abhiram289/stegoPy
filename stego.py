@@ -70,7 +70,7 @@ def la_report(arr):
     # ─────────────────────────────────────────────────────────────────────────
     # COMPONENT 2 — RREF / MATRIX SIMPLIFICATION
     #   Applying RREF to the patch reveals its rank — the number of linearly
-    #   independent rows. 
+    #   indepent rows
     # ─────────────────────────────────────────────────────────────────────────
     R, rank = _rref(patch.astype(float))
     lines += [" 2. RREF — MATRIX SIMPLIFICATION",
@@ -253,7 +253,6 @@ class EncodePanel(QWidget):
         self._w.start()
 
     def _done(self, arr):
-        
         self._result = arr; self.go.setEnabled(True)
         p, _ = QFileDialog.getSaveFileName(self, "Save Stego Image", "stego.png", "PNG (*.png)")
         if p:
