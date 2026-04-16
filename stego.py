@@ -5,18 +5,12 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import QPixmap, QImage, QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
-###############################################################################
 # LSB STEGANOGRAPHY CORE
-# -----------------------------------------------------------------------------
-# Hides a secret message in an image by flipping the least significant bit
-# of each RGB channel — a change of at most 1/255 per channel, imperceptible
-# to the human eye.
-###############################################################################
+
 HEADER, END = "STEGO:", "\x00\x00\x00"
 
 def encode(arr, msg):
-    # ── Pack message bytes into bits, then embed each bit into the LSB of a pixel channel.
-    #    Uses NumPy vectorized operations for speed.
+
     payload = (HEADER + msg + END).encode()
     bits = np.unpackbits(np.frombuffer(payload, dtype=np.uint8))
     h, w, _ = arr.shape
@@ -26,13 +20,10 @@ def encode(arr, msg):
     n = (len(bits) + 2) // 3
     pad = np.zeros(n * 3, dtype=np.uint8); pad[:len(bits)] = bits
     idx = np.arange(n * 3)
-    # Zero the LSB of each target channel, then OR in the payload bit
     flat[idx // 3, idx % 3] = (flat[idx // 3, idx % 3] & 0xFE) | pad
     return flat.reshape(h, w, 3)
 
 def decode(arr):
-    # ── Scan the LSBs of every channel in raster order, reassemble bytes,
-    #    and search for the header + terminator to extract the hidden text.
     lsbs = (arr.reshape(-1, 3) & 1).flatten()
     out = bytearray()
     for i in range(0, len(lsbs) - 7, 2048):
@@ -46,12 +37,8 @@ def decode(arr):
 
 
 # LINEAR ALGEBRA PIPELINE
-# Each numbered section below corresponds to a required evaluation component.
 
 def _rref(M):
-    # ── Helper: Gauss-Jordan elimination to reduce M to row-reduced echelon form.
-    #    Swaps rows to place the largest pivot first (partial pivoting) and
-    #    normalizes each pivot row before eliminating the column in all other rows.
     A = M.astype(float).copy(); r = 0
     for c in range(A.shape[1]):
         p = np.argmax(np.abs(A[r:, c])) + r
@@ -65,7 +52,6 @@ def _rref(M):
 
 def la_report(arr):
     h, w, _ = arr.shape
-    # Convert to grayscale (average channels) for 2-D matrix operations.
     gray = arr.mean(axis=2)
     lines = []
 
@@ -73,8 +59,6 @@ def la_report(arr):
     # COMPONENT 1 — MATRIX REPRESENTATION OF DATA
     #   The image is fundamentally a matrix: each pixel is a row-column entry
     #   holding three integer values (R, G, B) in [0, 255].
-    #   We display a 6×6 patch of the red channel to make this concrete.
-    #   Output: a small integer matrix and the overall image dimensions.
     # ─────────────────────────────────────────────────────────────────────────
     patch = arr[:6, :6, 0].astype(int)
     lines += [" 1. MATRIX REPRESENTATION OF DATA",
@@ -86,9 +70,7 @@ def la_report(arr):
     # ─────────────────────────────────────────────────────────────────────────
     # COMPONENT 2 — RREF / MATRIX SIMPLIFICATION
     #   Applying RREF to the patch reveals its rank — the number of linearly
-    #   independent rows. A rank < 6 means some rows are linear combinations of
-    #   others, indicating smooth (low-variation) image regions.
-    #   Output: the reduced matrix and its rank interpretation.
+    #   independent rows. 
     # ─────────────────────────────────────────────────────────────────────────
     R, rank = _rref(patch.astype(float))
     lines += [" 2. RREF — MATRIX SIMPLIFICATION",
@@ -100,10 +82,6 @@ def la_report(arr):
     # ─────────────────────────────────────────────────────────────────────────
     # COMPONENT 3 — BASIS AND ORTHOGONAL BASIS FORMATION (SVD)
     #   Singular Value Decomposition factors the grayscale matrix as M = UΣVᵀ.
-    #   U and V are orthonormal matrices whose columns form orthogonal bases for
-    #   the row space and column space of the image respectively.
-    #   Σ (singular values) quantify how much variance each basis direction holds.
-    #   Output: top-8 singular values, and the dimensions of U and V.
     # ─────────────────────────────────────────────────────────────────────────
     U, S, Vt = np.linalg.svd(gray, full_matrices=False)
     energy = (S**2).cumsum() / (S**2).sum()
@@ -116,11 +94,9 @@ def la_report(arr):
               f"   V ∈ ℝ^({min(h,w)}×{w}): columns are orthonormal basis vectors for the column space\n"]
 
     # ─────────────────────────────────────────────────────────────────────────
-    # COMPONENT 4 — PROJECTION-BASED PREDICTION / DIMENSIONALITY REDUCTION
+    # COMPONENT 4 — PROJECTION-BASED PREDICTION 
     #   We project the image onto the k-dimensional subspace spanned by the top-k
     #   left singular vectors, retaining 90% of the total signal energy.
-    #   Formula: M̂ = U_k Σ_k Vᵀ_k  (orthogonal projection onto a subspace)
-    #   Output: number of components needed, reconstruction error, storage saving.
     # ─────────────────────────────────────────────────────────────────────────
     recon = U[:, :k90] @ np.diag(S[:k90]) @ Vt[:k90, :]
     err = np.linalg.norm(gray - recon) / np.linalg.norm(gray)
@@ -133,9 +109,6 @@ def la_report(arr):
     # ─────────────────────────────────────────────────────────────────────────
     # COMPONENT 5 — LEAST SQUARES ESTIMATION
     #   We model horizontal pixel correlation: p[i+1] ≈ a·p[i] + b.
-    #   This is an overdetermined linear system Ax ≈ b (more equations than unknowns).
-    #   Least squares minimizes ‖Ax - b‖² via the normal equations AᵀAx = Aᵀb.
-    #   Output: fitted coefficients a and b, and residual norm² as a fit measure.
     # ─────────────────────────────────────────────────────────────────────────
     n_s = min(800, h * (w - 1))
     rng = np.random.default_rng(42)
@@ -151,30 +124,10 @@ def la_report(arr):
               (f"   Residual norm²: {res[0]:.2f}  (lower = stronger pixel-to-pixel correlation)\n"
                if len(res) else "   (residual not returned for this image size)\n")]
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # COMPONENT 6 — EIGENVALUE / EIGENVECTOR ANALYSIS
-    #   We compute the covariance matrix of an s×s pixel patch, then find its
-    #   eigenvalues. Each eigenvalue measures variance along its eigenvector
-    #   (principal direction). A dominant λ₁ means pixels vary mostly along one
-    #   direction — high spatial coherence / smooth texture.
-    #   Output: top-5 eigenvalues and the percentage of variance in λ₁.
-    # ─────────────────────────────────────────────────────────────────────────
-    s = min(48, h, w)
-    eigvals = np.linalg.eigvalsh(np.cov(gray[:s, :s]))[::-1]
-    top5 = eigvals[:5]
-    lines += [f" 6. EIGENVALUE / EIGENVECTOR ANALYSIS  (covariance of {s}×{s} patch)",
-              "   Cov = (1/n) XᵀX  where X is the mean-centred patch matrix.",
-              "   Top-5 eigenvalues λ (sorted descending):",
-              "   " + "  ".join(f"{v:.1f}" for v in top5),
-              f"   Variance explained by λ₁: {top5[0]/eigvals.sum()*100:.1f}%",
-              f"   Eigenvectors define the principal directions of pixel intensity variation.\n"]
 
     # ─────────────────────────────────────────────────────────────────────────
-    # COMPONENT 7 — FINAL REDUCED MODEL / APPLICATION OUTPUT
+    # COMPONENT 6 — FINAL REDUCED MODEL / APPLICATION OUTPUT
     #   Combining all previous components, we report the steganographic capacity
-    #   of this image — the maximum secret payload it can carry without any
-    #   perceptible quality loss, grounded in the LSB embedding model.
-    #   Output: total bit capacity, byte capacity, and PSNR impact estimate.
     # ─────────────────────────────────────────────────────────────────────────
     cap = h * w * 3 // 8
     lines += [" 7. FINAL REDUCED MODEL — APPLICATION OUTPUT",
@@ -188,8 +141,6 @@ def la_report(arr):
 
     return "\n".join(lines)
 
-# Runs encode / decode / la_report off the main GUI thread so the UI stays
-# responsive during heavy NumPy computation on large images.
 
 class Worker(QThread):
     done = pyqtSignal(object); fail = pyqtSignal(str)
@@ -285,8 +236,7 @@ class EncodePanel(QWidget):
         self.go.clicked.connect(self._run)
 
     def _analyse(self, arr):
-        # ── Run all 7 LA components in a background thread; display results
-        #    in the monospaced analysis box once complete.
+
         self.ana.setPlainText("Computing pipeline…")
         self._rw = Worker(la_report, arr)
         self._rw.done.connect(lambda r: self.ana.setPlainText(r), Qt.QueuedConnection)
@@ -303,8 +253,7 @@ class EncodePanel(QWidget):
         self._w.start()
 
     def _done(self, arr):
-        # ── Encoding succeeded — prompt user to save as PNG (lossless, required
-        #    to preserve LSBs; JPEG compression would destroy the hidden payload).
+        
         self._result = arr; self.go.setEnabled(True)
         p, _ = QFileDialog.getSaveFileName(self, "Save Stego Image", "stego.png", "PNG (*.png)")
         if p:
